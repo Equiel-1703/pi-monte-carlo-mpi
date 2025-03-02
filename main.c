@@ -14,7 +14,6 @@ typedef struct
     int outside_samples_amount;
 } Samples;
 
-
 void initialize_message_buffer()
 {
     int buff_size = MPI_BSEND_OVERHEAD + (10'000 * sizeof(char));
@@ -41,9 +40,9 @@ void ordered_print(char *str, int *counter)
 }
 
 // Gera um número aleatório entre 0 e 1 (inclusivo)
-float randf()
+double randf()
 {
-    return (float)rand() / (float)RAND_MAX;
+    return (double)rand() / (double)RAND_MAX;
 }
 
 Samples calculate_samples(int samples_to_calculate)
@@ -54,15 +53,19 @@ Samples calculate_samples(int samples_to_calculate)
 
     for (int i = 0; i < samples_to_calculate; i++)
     {
-        float x = randf();
-        float y = randf();
+        // Range of values are from -1 to +1
+        double x = randf() * 2.0 - 1.0;
+        double y = randf() * 2.0 - 1.0;
 
-        float distance_from_origin = sqrt(x * x + y * y);
+        double distance_from_origin = sqrt(x * x + y * y);
 
         if (distance_from_origin <= 1.0)
+        {
             s.inside_samples_amount += 1;
-        else
-            s.outside_samples_amount += 1;
+        }
+
+        // Um ponto sempre vai estar dentro do quadrado, independente de estar dentro do círculo ou não
+        s.outside_samples_amount += 1;
     }
 
     return s;
@@ -128,9 +131,23 @@ int main(int argc, char const *argv[])
         ordered_print(send_buffer, &sent_message_count);
     }
 
+    // Multiplicando o rank por 4 e somando no time(0) para evitar que cada processo gere números aleatórios próximos/iguais
     srand(time(0) + (rank * 4));
+    // Cada processo vai gerar e contar quantos pontos aleatórios ficaram dentro e fora do círculo unitário
     Samples s = calculate_samples(samples_to_calculate);
-    
+    int s_array[2] = {s.inside_samples_amount, s.outside_samples_amount};
+
+    // Somar tudo no processo root
+    int total_count[2];
+    MPI_Reduce(s_array, total_count, 2, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    // Processo root calcula o PI usando os samples obtidos
+    double pi_aprox;
+    if (rank == 0)
+    {
+        pi_aprox = 4.0 * (double)total_count[0] / (double)total_count[1];
+    }
+
     sprintf(send_buffer, "Samples do rank %d: ins=%d out=%d\n", rank, s.inside_samples_amount, s.outside_samples_amount);
     ordered_print(send_buffer, &sent_message_count);
 
@@ -160,7 +177,10 @@ int main(int argc, char const *argv[])
                 total_messages -= 1;
             }
         }
-        
+
+        printf("\nPI aproximado (%d samples) = %lf\n", samples_amount, pi_aprox);
+        printf("Total de samples no círculo unitário: %d\n", total_count[0]);
+        printf("Total de samples fora do círculo unitário: %d\n", total_count[1]);
     }
 
     delete_message_buffer();
